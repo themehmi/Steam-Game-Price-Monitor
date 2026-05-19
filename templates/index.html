@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- This meta tag is crucial for mobile responsiveness -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Live Steam Price Monitor</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+        
+        body {
+            /* Authentic Steam dark gradient overlay with gaming poster background */
+            background: linear-gradient(rgba(27, 40, 56, 0.88), rgba(21, 25, 31, 0.95)), 
+                        url('https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=2070&auto=format&fit=crop') no-repeat center center fixed;
+            background-size: cover; color: #e0e0e0; padding: 40px 20px;
+            display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+        }
+
+        .container, .watchlist-container {
+            background: rgba(35, 35, 35, 0.65); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08); padding: 30px;
+            border-radius: 12px; width: 100%; max-width: 650px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); margin-bottom: 20px;
+        }
+
+        /* Flexbox header to align logo and text */
+        .main-title {
+            display: flex; justify-content: center; align-items: center; gap: 12px;
+            margin-bottom: 10px; color: #fff; font-size: 2em; font-weight: bold;
+        }
+
+        .subtitle { text-align: center; font-size: 0.9em; color: #aaa; margin-bottom: 25px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 0.9em; color: #ccc; }
+        
+        input, select, button {
+            width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.4);
+            border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 1em; outline: none;
+        }
+        input:focus, select:focus { border-color: #66c0f4; }
+        
+        .btn-main { background-color: #1b2838; border-color: #66c0f4; color: #66c0f4; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; }
+        .btn-main:hover { background-color: #66c0f4; color: #1b2838; }
+        
+        .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+        .search-bar input { flex-grow: 1; }
+        .search-bar button { width: auto; margin-top: 0; padding: 12px 25px; cursor: pointer; background: #333; border: 1px solid #555; color: white;}
+        .search-bar button:hover { background: #555; }
+        
+        .game-item { display: flex; flex-direction: column; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 6px; margin-bottom: 12px; border-left: 4px solid #444; }
+        .game-item.alert-active { border-left-color: #5cb85c; background: rgba(92, 184, 92, 0.1); }
+        .game-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px; margin-bottom: 10px; }
+        
+        .btn-delete { background: rgba(255, 74, 74, 0.1); color: #ff4a4a; border: 1px solid #ff4a4a; padding: 6px 12px; border-radius: 4px; font-size: 0.85em; cursor: pointer; transition: 0.2s; margin-top: 0; width: auto; }
+        .btn-delete:hover { background: #ff4a4a; color: white; }
+        .header-actions { display: flex; gap: 15px; align-items: center; }
+
+        .price-compare { display: flex; justify-content: space-between; font-size: 0.95em; gap: 10px; }
+        .price-box { text-align: center; width: 48%; background: rgba(255,255,255,0.05); padding: 12px 8px; border-radius: 4px; }
+        .price-dropped { color: #5cb85c; font-weight: bold; font-size: 1.1em;}
+        .price-same { color: #ccc; font-size: 1.1em; }
+        
+        .error { background: rgba(255, 74, 74, 0.2); border-left: 4px solid #ff4a4a; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        
+        .popup-notification {
+            position: fixed; bottom: 20px; right: 20px; background: rgba(30, 45, 60, 0.95);
+            border: 2px solid #5cb85c; padding: 20px; border-radius: 8px; width: 320px;
+            display: none; z-index: 1000; animation: slideIn 0.5s ease-out;
+        }
+        @keyframes slideIn { from { transform: translateX(120%); } to { transform: translateX(0); } }
+        .popup-close { float: right; cursor: pointer; color: #aaa; font-weight: bold; }
+
+        /* --- MOBILE RESPONSIVENESS (Triggers on screens smaller than 650px) --- */
+        @media (max-width: 650px) {
+            body { padding: 20px 10px; }
+            .container, .watchlist-container { padding: 20px; }
+            .main-title { font-size: 1.5em; } /* Shrink header text */
+            .main-title img { width: 32px; height: 32px; } /* Shrink logo */
+            
+            /* Stack search bar */
+            .search-bar { flex-direction: column; }
+            .search-bar button { width: 100%; }
+            
+            /* Stack game header elements */
+            .game-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .header-actions { width: 100%; justify-content: space-between; margin-top: 5px; }
+            
+            /* Stack price boxes */
+            .price-compare { flex-direction: column; }
+            .price-box { width: 100%; }
+            
+            /* Center mobile popup */
+            .popup-notification { 
+                bottom: 20px; left: 50%; transform: translateX(-50%); 
+                width: 90%; right: auto; 
+                animation: slideUp 0.5s ease-out;
+            }
+            @keyframes slideUp { from { transform: translate(-50%, 120%); } to { transform: translate(-50%, 0); } }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="main-title">
+        <!-- Official Steam Vector Logo -->
+        <img src="https://upload.wikimedia.org/wikipedia/commons/8/83/Steam_icon_logo.svg" alt="Steam Logo" width="45" height="45">
+        Steam Games Price Monitor
+    </div>
+    <div class="subtitle">Track prices. Get alerted. Save money.</div>
+
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+        <div class="form-group">
+            <label>
+                <span>Steam App ID OR Game Name</span>
+                <a href="https://steamdb.info/" target="_blank" style="color: #66c0f4; text-decoration: none; font-size: 0.85em;">(get App ID from here)</a>
+            </label>
+            <input type="text" name="app_id" placeholder="e.g. 292030 OR The Witcher 3" required>
+        </div>
+        <div class="form-group">
+            <label>Condition</label>
+            <select name="alert_type">
+                <option value="target_price">Drop at or below Target Price</option>
+                <option value="discount_drop">Any Active Sale Discount</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Target Price Threshold (if applicable)</label>
+            <input type="number" name="threshold" step="0.01" value="15.00">
+        </div>
+        <button type="submit" class="btn-main">Add Game to Watchlist</button>
+    </form>
+</div>
+
+<div class="watchlist-container">
+    <h2 style="margin-bottom: 15px;">📋 Tracked Watchlist</h2>
+    
+    <form method="GET" class="search-bar">
+        <input type="text" name="search" placeholder="Filter your list..." value="{{ search_query }}">
+        <button type="submit">Search</button>
+        {% if search_query %}
+            <a href="/" style="display:block; text-align:center; margin-top:10px; color:#aaa; text-decoration:none;">Clear Filter</a>
+        {% endif %}
+    </form>
+
+    <div style="margin-top:15px;">
+        {% if not watchlist %}
+            <p style="text-align:center; color:#888; padding: 20px 0;">No games found.</p>
+        {% endif %}
+        
+        {% for app_id, title, initial_price_str, price_str, alert_type, threshold, triggered, initial_price, current_price in watchlist %}
+            <div class="game-item {% if triggered == 1 %}alert-active{% endif %}">
+                
+                <div class="game-header">
+                    <div>
+                        <a href="https://store.steampowered.com/app/{{ app_id }}/" target="_blank" style="color: #fff; text-decoration: none; font-size: 1.1em; font-weight: bold;">
+                            {{ title }} 🔗
+                        </a> 
+                        <br><small style="color:#888;">Alert: {{ alert_type.replace('_',' ') }} (Goal: {{ threshold }})</small>
+                    </div>
+                    
+                    <div class="header-actions">
+                        <a href="https://store.steampowered.com/app/{{ app_id }}/" target="_blank" style="color: #66c0f4; font-size: 0.85em; text-decoration: none;">View Store</a>
+                        
+                        <form action="/delete/{{ app_id }}" method="POST" style="margin: 0; padding: 0;">
+                            <button type="submit" class="btn-delete" onclick="return confirm('Stop tracking {{ title }}?');">
+                                ✖ Remove
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="price-compare">
+                    <div class="price-box">
+                        <span style="color:#888; font-size:0.8em; display:block; margin-bottom: 4px;">PRICE BEFORE</span>
+                        <span class="price-same">{{ initial_price_str }}</span>
+                    </div>
+                    <div class="price-box">
+                        <span style="color:#888; font-size:0.8em; display:block; margin-bottom: 4px;">PRICE AFTER</span>
+                        <span class="{% if current_price < initial_price %}price-dropped{% else %}price-same{% endif %}">
+                            {{ price_str }}
+                        </span>
+                    </div>
+                </div>
+
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div id="alertPopup" class="popup-notification">
+    <span class="popup-close" onclick="closePopup()">&times;</span>
+    <h4 style="color: #5cb85c; margin-bottom: 5px;">🔥 PRICE DROP DETECTED!</h4>
+    <p id="alertMessage" style="font-size: 0.95em; color: #fff;"></p>
+    <a id="alertLink" href="#" target="_blank" style="color: #66c0f4; display:block; margin-top:10px; font-size:0.85em;">View on Steam Store</a>
+</div>
+
+<script>
+    let activeAlertAppId = null;
+
+    setInterval(function() {
+        fetch('/api/alerts')
+            .then(response => response.json())
+            .then(alerts => {
+                if(alerts.length > 0) {
+                    let topAlert = alerts[0]; 
+                    activeAlertAppId = topAlert.app_id;
+                    
+                    document.getElementById("alertMessage").innerHTML = `<strong>${topAlert.title}</strong> has hit your threshold! Current Price: <b>${topAlert.price}</b>`;
+                    document.getElementById("alertLink").href = `https://store.steampowered.com/app/${topAlert.app_id}/`;
+                    document.getElementById("alertPopup").style.display = "block";
+                }
+            });
+    }, 4000);
+
+    function closePopup() {
+        document.getElementById("alertPopup").style.display = "none";
+        if (activeAlertAppId) {
+            fetch('/api/dismiss', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ app_id: activeAlertAppId })
+            }).then(() => {
+                window.location.reload(); 
+            });
+        }
+    }
+</script>
+
+</body>
+</html>
