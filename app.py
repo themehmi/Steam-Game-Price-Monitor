@@ -2,33 +2,22 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 import requests
 from bs4 import BeautifulSoup
 import re
-import sqlite3
+import os
+from dotenv import load_dotenv
+from pymongo import MongoClient
 import threading
 import time
 
+# Load environment variables from .env
+load_dotenv()
+
 app = Flask(__name__)
-DB_NAME = "steam_tracker.db"
 
 # DATABASE SETUP
-def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS watchlist (
-                app_id TEXT PRIMARY KEY,
-                title TEXT,
-                initial_price REAL,
-                current_price REAL,
-                initial_price_str TEXT,
-                price_str TEXT,
-                alert_type TEXT,
-                threshold REAL,
-                triggered INTEGER DEFAULT 0
-            )
-        ''')
-        conn.commit()
-
-init_db()
+MONGO_URI = os.environ.get("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client["steam_tracker"]
+watchlist_col = db["watchlist"]
 
 # STEAM SEARCH BY NAME HELPER
 def get_app_id_from_name(game_name):
@@ -77,28 +66,32 @@ def background_price_checker():
     while True:
         time.sleep(60) 
         try:
-            with sqlite3.connect(DB_NAME) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT app_id, alert_type, threshold, triggered, initial_price FROM watchlist")
-                games = cursor.fetchall()
+            games = list(watchlist_col.find({}, {"_id": 1, "alert_type": 1, "threshold": 1, "triggered": 1, "initial_price": 1}))
+            for game in games:
+                app_id = game["_id"]
+                alert_type = game.get("alert_type")
+                threshold = game.get("threshold", 0.0)
+                triggered = game.get("triggered", 0)
                 
-                for app_id, alert_type, threshold, triggered, initial_price in games:
-                    data = scrape_steam_price(app_id)
-                    if data:
-                        current_price = data['price_float']
-                        price_str = data['price_str']
+                data = scrape_steam_price(app_id)
+                if data:
+                    current_price = data['price_float']
+                    price_str = data['price_str']
+                    
+                    is_triggered = 0
+                    if alert_type == "target_price" and current_price <= threshold:
+                        is_triggered = 1
+                    elif alert_type == "discount_drop" and "discount" in price_str.lower():
+                        is_triggered = 1
                         
-                        is_triggered = 0
-                        if alert_type == "target_price" and current_price <= threshold:
-                            is_triggered = 1
-                        elif alert_type == "discount_drop" and "discount" in price_str.lower():
-                            is_triggered = 1
-                            
-                        if is_triggered == 1 and triggered == 0:
-                            cursor.execute("UPDATE watchlist SET current_price=?, price_str=?, triggered=1 WHERE app_id=?", (current_price, price_str, app_id))
-                        else:
-                            cursor.execute("UPDATE watchlist SET current_price=?, price_str=? WHERE app_id=?", (current_price, price_str, app_id))
-                conn.commit()
+                    update_fields = {
+                        "current_price": current_price,
+                        "price_str": price_str
+                    }
+                    if is_triggered == 1 and triggered == 0:
+                        update_fields["triggered"] = 1
+                        
+                    watchlist_col.update_one({"_id": app_id}, {"$set": update_fields})
         except Exception as e:
             print(f"Background worker error: {e}")
 
@@ -130,13 +123,22 @@ def index():
                 data = scrape_steam_price(app_id)
                 if data:
                     try:
-                        with sqlite3.connect(DB_NAME) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("""
-                                INSERT OR REPLACE INTO watchlist (app_id, title, initial_price, current_price, initial_price_str, price_str, alert_type, threshold, triggered)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-                            """, (app_id, data['title'], data['price_float'], data['price_float'], data['price_str'], data['price_str'], alert_type, threshold))
-                            conn.commit()
+                        watchlist_col.replace_one(
+                            {"_id": app_id},
+                            {
+                                "_id": app_id,
+                                "app_id": app_id,
+                                "title": data['title'],
+                                "initial_price": data['price_float'],
+                                "current_price": data['price_float'],
+                                "initial_price_str": data['price_str'],
+                                "price_str": data['price_str'],
+                                "alert_type": alert_type,
+                                "threshold": threshold,
+                                "triggered": 0
+                            },
+                            upsert=True
+                        )
                     except Exception as e:
                         error_msg = f"Database error: {e}"
                 else:
@@ -144,40 +146,56 @@ def index():
 
     # Handle Dashboard Search
     search_query = request.args.get('search', '').strip()
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
+    try:
         if search_query:
-            cursor.execute("SELECT app_id, title, initial_price_str, price_str, alert_type, threshold, triggered, initial_price, current_price FROM watchlist WHERE title LIKE ?", ('%' + search_query + '%',))
+            cursor = watchlist_col.find({"title": {"$regex": re.escape(search_query), "$options": "i"}})
         else:
-            cursor.execute("SELECT app_id, title, initial_price_str, price_str, alert_type, threshold, triggered, initial_price, current_price FROM watchlist")
-        watchlist = cursor.fetchall()
+            cursor = watchlist_col.find()
+        
+        watchlist = []
+        for doc in cursor:
+            watchlist.append((
+                doc.get("_id"),
+                doc.get("title", ""),
+                doc.get("initial_price_str", ""),
+                doc.get("price_str", ""),
+                doc.get("alert_type", ""),
+                doc.get("threshold", 0.0),
+                doc.get("triggered", 0),
+                doc.get("initial_price", 0.0),
+                doc.get("current_price", 0.0)
+            ))
+    except Exception as e:
+        watchlist = []
+        error_msg = f"Database error: {e}"
 
     return render_template('index.html', watchlist=watchlist, error=error_msg, search_query=search_query)
 
 # NEW ROUTE: DELETE GAME
 @app.route('/delete/<app_id>', methods=['POST'])
 def delete_game(app_id):
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM watchlist WHERE app_id = ?", (app_id,))
-        conn.commit()
+    watchlist_col.delete_one({"_id": app_id})
     return redirect(url_for('index'))
 
 @app.route('/api/alerts')
 def check_alerts():
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT app_id, title, price_str FROM watchlist WHERE triggered = 1")
-        alerts = cursor.fetchall()
-    return jsonify([{"app_id": a[0], "title": a[1], "price": a[2]} for a in alerts])
+    alerts = []
+    try:
+        cursor = watchlist_col.find({"triggered": 1}, {"_id": 1, "title": 1, "price_str": 1})
+        for doc in cursor:
+            alerts.append({
+                "app_id": doc.get("_id"),
+                "title": doc.get("title", ""),
+                "price": doc.get("price_str", "")
+            })
+    except Exception:
+        pass
+    return jsonify(alerts)
 
 @app.route('/api/dismiss', methods=['POST'])
 def dismiss_alert():
     app_id = request.json.get('app_id')
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE watchlist SET triggered = 2 WHERE app_id = ?", (app_id,))
-        conn.commit()
+    watchlist_col.update_one({"_id": app_id}, {"$set": {"triggered": 2}})
     return jsonify({"status": "success"})
 
 if __name__ == '__main__':
